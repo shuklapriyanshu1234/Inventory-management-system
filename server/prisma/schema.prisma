@@ -1,0 +1,411 @@
+// Prisma schema for XYZ Retail Corporation Inventory Management System
+// Compatible with both SQLite (for zero-config local run) and PostgreSQL (for docker/production)
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ----------------------------------------------------
+// 1. Users, Auth, and Audit
+// ----------------------------------------------------
+
+model User {
+  id              String         @id @default(uuid())
+  email           String         @unique
+  passwordHash    String
+  name            String
+  role            String         @default("WAREHOUSE_STAFF") // ADMIN, MANAGER, WAREHOUSE_STAFF, SALES
+  isActive        Boolean        @default(true)
+  resetToken      String?
+  resetTokenExp   DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  auditLogs       AuditLog[]
+  stockMovements  StockMovement[]
+  salesOrders     SalesOrder[]
+  purchaseOrders  PurchaseOrder[]
+  stockTransfers  StockTransfer[]
+  stockCounts     StockCount[]
+  orderTimelines  OrderTimeline[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String   // e.g., CREATE, UPDATE, DELETE, ADJUST, TRANSFER
+  entity     String   // e.g., Product, Stock, Order, User
+  entityId   String?
+  details    String   // JSON string with before/after or payload details
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// ----------------------------------------------------
+// 2. Product Catalog & Categories
+// ----------------------------------------------------
+
+model Category {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products    Product[]
+}
+
+model Product {
+  id           String             @id @default(uuid())
+  sku          String             @unique
+  barcode      String             @unique
+  name         String
+  description  String?
+  categoryId   String
+  category     Category           @relation(fields: [categoryId], references: [id])
+  price        Float              @default(0.0) // Selling price
+  cost         Float              @default(0.0) // Unit cost
+  reorderLevel Int                @default(10)  // Minimum stock threshold
+  maxLevel     Int                @default(100) // Maximum capacity threshold
+  imageUrl     String?
+  isActive     Boolean            @default(true)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  stocks             Stock[]
+  stockMovements     StockMovement[]
+  salesOrderItems    SalesOrderItem[]
+  purchaseOrderItems PurchaseOrderItem[]
+  transferItems      StockTransferItem[]
+  countItems         StockCountItem[]
+
+  @@index([sku])
+  @@index([barcode])
+  @@index([categoryId])
+  @@index([isActive])
+}
+
+// ----------------------------------------------------
+// 3. Locations & Multi-Location Stock
+// ----------------------------------------------------
+
+model Location {
+  id        String       @id @default(uuid())
+  code      String       @unique
+  name      String
+  type      String       @default("WAREHOUSE") // WAREHOUSE, STORE
+  address   String?
+  isActive  Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  stocks           Stock[]
+  stockMovements   StockMovement[]
+  transfersFrom    StockTransfer[] @relation("SourceTransfers")
+  transfersTo      StockTransfer[] @relation("TargetTransfers")
+  purchaseOrders   PurchaseOrder[]
+  stockCounts      StockCount[]
+  salesOrders      SalesOrder[]
+
+  @@index([code])
+  @@index([type])
+}
+
+model Stock {
+  id               String   @id @default(uuid())
+  productId        String
+  product          Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  locationId       String
+  location         Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  quantityOnHand   Int      @default(0) // Physical available stock
+  quantityReserved Int      @default(0) // Reserved for unfulfilled sales orders
+  version          Int      @default(0) // Optimistic concurrency version
+  updatedAt        DateTime @updatedAt
+
+  @@unique([productId, locationId])
+  @@index([productId])
+  @@index([locationId])
+}
+
+// ----------------------------------------------------
+// 4. Stock Movement Ledger & Adjustments
+// ----------------------------------------------------
+
+model StockMovement {
+  id             String       @id @default(uuid())
+  productId      String
+  product        Product      @relation(fields: [productId], references: [id])
+  locationId     String
+  location       Location     @relation(fields: [locationId], references: [id])
+  type           String       // RECEIPT, SHIPMENT, TRANSFER_OUT, TRANSFER_IN, ADJUSTMENT_IN, ADJUSTMENT_OUT, RETURN
+  changeQuantity Int          // Positive for additions, negative for deductions
+  beforeQuantity Int
+  afterQuantity  Int
+  referenceType  String?      // PO, SALES_ORDER, TRANSFER, CYCLE_COUNT, MANUAL
+  referenceId    String?
+  reason         String?
+  userId         String?
+  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt      DateTime     @default(now())
+
+  @@index([productId])
+  @@index([locationId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ----------------------------------------------------
+// 5. Stock Transfers Between Locations
+// ----------------------------------------------------
+
+model StockTransfer {
+  id               String              @id @default(uuid())
+  transferNumber   String              @unique
+  sourceLocationId String
+  sourceLocation   Location            @relation("SourceTransfers", fields: [sourceLocationId], references: [id])
+  targetLocationId String
+  targetLocation   Location            @relation("TargetTransfers", fields: [targetLocationId], references: [id])
+  status           String              @default("PENDING") // PENDING, IN_TRANSIT, COMPLETED, CANCELLED
+  notes            String?
+  createdById      String?
+  createdBy        User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  items            StockTransferItem[]
+
+  @@index([transferNumber])
+  @@index([status])
+}
+
+model StockTransferItem {
+  id                String        @id @default(uuid())
+  transferId        String
+  transfer          StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product       @relation(fields: [productId], references: [id])
+  requestedQuantity Int
+  receivedQuantity  Int           @default(0)
+
+  @@index([transferId])
+}
+
+// ----------------------------------------------------
+// 6. Physical Stock Counts / Cycle Counts
+// ----------------------------------------------------
+
+model StockCount {
+  id            String           @id @default(uuid())
+  countNumber   String           @unique
+  locationId    String
+  location      Location         @relation(fields: [locationId], references: [id])
+  status        String           @default("IN_PROGRESS") // IN_PROGRESS, RECONCILED, CANCELLED
+  notes         String?
+  conductedById String?
+  conductedBy   User?            @relation(fields: [conductedById], references: [id], onDelete: SetNull)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  items         StockCountItem[]
+
+  @@index([countNumber])
+  @@index([locationId])
+}
+
+model StockCountItem {
+  id              String     @id @default(uuid())
+  stockCountId    String
+  stockCount      StockCount @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product    @relation(fields: [productId], references: [id])
+  systemQuantity  Int
+  countedQuantity Int
+  variance        Int        // counted - system
+
+  @@index([stockCountId])
+}
+
+// ----------------------------------------------------
+// 7. Customers & Sales Orders
+// ----------------------------------------------------
+
+model Customer {
+  id        String       @id @default(uuid())
+  name      String
+  email     String       @unique
+  phone     String?
+  address   String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  orders    SalesOrder[]
+
+  @@index([email])
+}
+
+model SalesOrder {
+  id          String           @id @default(uuid())
+  orderNumber String           @unique
+  customerId  String
+  customer    Customer         @relation(fields: [customerId], references: [id])
+  locationId  String
+  location    Location         @relation(fields: [locationId], references: [id])
+  status      String           @default("PLACED") // PLACED, PICKED, PACKED, SHIPPED, DELIVERED, CANCELLED
+  totalAmount Float            @default(0.0)
+  notes       String?
+  createdById String?
+  createdBy   User?            @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  items       SalesOrderItem[]
+  timeline    OrderTimeline[]
+
+  @@index([orderNumber])
+  @@index([status])
+  @@index([customerId])
+  @@index([locationId])
+}
+
+model SalesOrderItem {
+  id                  String     @id @default(uuid())
+  orderId             String
+  order               SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId           String
+  product             Product    @relation(fields: [productId], references: [id])
+  quantity            Int
+  unitPrice           Float
+  backorderedQuantity Int        @default(0)
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+model OrderTimeline {
+  id          String      @id @default(uuid())
+  orderId     String
+  order       SalesOrder  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status      String
+  notes       String?
+  createdById String?
+  createdBy   User?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime    @default(now())
+
+  @@index([orderId])
+}
+
+// ----------------------------------------------------
+// 8. Suppliers & Purchase Orders
+// ----------------------------------------------------
+
+model Supplier {
+  id           String          @id @default(uuid())
+  name         String          @unique
+  contactName  String?
+  email        String?
+  phone        String?
+  address      String?
+  leadTimeDays Int             @default(5)
+  isActive     Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+
+  @@index([name])
+}
+
+model PurchaseOrder {
+  id                    String              @id @default(uuid())
+  poNumber              String              @unique
+  supplierId            String
+  supplier              Supplier            @relation(fields: [supplierId], references: [id])
+  destinationLocationId String
+  destinationLocation   Location            @relation(fields: [destinationLocationId], references: [id])
+  status                String              @default("DRAFT") // DRAFT, SENT, PARTIALLY_RECEIVED, RECEIVED, CANCELLED
+  totalAmount           Float               @default(0.0)
+  notes                 String?
+  createdById           String?
+  createdBy             User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  expectedDate          DateTime?
+  receivedDate          DateTime?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  items                 PurchaseOrderItem[]
+
+  @@index([poNumber])
+  @@index([status])
+  @@index([supplierId])
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(uuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id])
+  orderedQuantity Int
+  receivedQuantity Int          @default(0)
+  unitCost        Float
+
+  @@index([purchaseOrderId])
+  @@index([productId])
+}
+
+// ----------------------------------------------------
+// 9. Integration, API Keys & Webhooks
+// ----------------------------------------------------
+
+model ApiKey {
+  id         String    @id @default(uuid())
+  key        String    @unique
+  name       String
+  role       String    @default("MANAGER")
+  isActive   Boolean   @default(true)
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([key])
+}
+
+model Webhook {
+  id          String            @id @default(uuid())
+  url         String
+  secret      String
+  events      String            // Comma-separated list of subscribed event types
+  isActive    Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  deliveries  WebhookDelivery[]
+
+  @@index([isActive])
+}
+
+model WebhookDelivery {
+  id          String   @id @default(uuid())
+  webhookId   String
+  webhook     Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  event       String
+  payload     String
+  status      String   // SUCCESS, FAILED
+  statusCode  Int?
+  attempts    Int      @default(1)
+  error       String?
+  createdAt   DateTime @default(now())
+
+  @@index([webhookId])
+  @@index([createdAt])
+}

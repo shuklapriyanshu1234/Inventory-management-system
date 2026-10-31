@@ -1,0 +1,68 @@
+[
+  {
+    "id": "1734311001001",
+    "name": "Ballpoint Pen (Blue)",
+    "quantity": 100,
+    "price": 1.5
+  },
+  {
+    "id": "1734311001002",
+    "name": "Spiral Notebook",
+    "quantity": 75,
+    "price": 3.25
+  },
+  {
+    "id": "1734311001003",
+    "name": "Scientific Calculator",
+    "quantity": 12,
+    "price": 15.99
+  },
+  {
+    "id": "1734311001004",
+    "name": "A4 Printer Paper (Ream)",
+    "quantity": 4,
+    "price": 6.5
+  },
+  {
+    "id": "1734311001006",
+    "name": "Desk Stapler",
+    "quantity": 20,
+    "price": 5.45
+  },
+  {
+    "id": "1734311001007",
+    "name": "Sticky Notes (Yellow)",
+    "quantity": 3,
+    "price": 1.99
+  },
+  {
+    "id": "1734311001008",
+    "name": "USB Drive 64GB",
+    "quantity": 45,
+    "price": 12
+  },
+  {
+    "id": "1734311001009",
+    "name": "Office Scissors",
+    "quantity": 4,
+    "price": 4.25
+  },
+  {
+    "id": "1734311001010",
+    "name": "Glue Stick",
+    "quantity": 60,
+    "price": 0.99
+  },
+  {
+    "id": "1765967998934",
+    "name": "milk",
+    "quantity": 10,
+    "price": 60
+  },
+  {
+    "id": "1765971834029",
+    "name": "CHOCOLATE",
+    "quantity": 5,
+    "price": 55
+  }
+]

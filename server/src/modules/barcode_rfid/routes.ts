@@ -1,0 +1,222 @@
+import { Router, Request, Response, NextFunction } from 'express';
+import prisma from '../../db';
+import { authenticate, authorize, AuthRequest } from '../../middlewares/auth';
+import { logAudit } from '../../middlewares/audit';
+
+const router = Router();
+
+// ========================
+// RFID HARDWARE ABSTRACTION INTERFACE & MOCK SIMULATOR
+// ========================
+export interface RFIDTagRead {
+  epc: string; // Electronic Product Code
+  sku: string;
+  locationCode: string;
+  rssi: number; // Signal strength dBm
+  timestamp: string;
+}
+
+export interface IRFIDReader {
+  connect(): Promise<boolean>;
+  disconnect(): Promise<boolean>;
+  readInventory(): Promise<RFIDTagRead[]>;
+}
+
+// Simulated RFID Reader implementation
+export class SimulatedRFIDReader implements IRFIDReader {
+  private connected: boolean = false;
+
+  async connect(): Promise<boolean> {
+    this.connected = true;
+    return true;
+  }
+
+  async disconnect(): Promise<boolean> {
+    this.connected = false;
+    return true;
+  }
+
+  async readInventory(): Promise<RFIDTagRead[]> {
+    if (!this.connected) throw new Error('RFID Reader is not connected');
+
+    // Fetch random active products to simulate RFID portal/handheld scan
+    const products = await prisma.product.findMany({
+      where: { isActive: true },
+      take: 8
+    });
+
+    return products.map(p => ({
+      epc: `EPC96-${Buffer.from(p.sku).toString('hex').slice(0, 16).toUpperCase()}`,
+      sku: p.sku,
+      locationCode: 'WH-MAIN',
+      rssi: Math.floor(Math.random() * 30) - 70, // -70 to -40 dBm
+      timestamp: new Date().toISOString()
+    }));
+  }
+}
+
+const rfidReaderInstance = new SimulatedRFIDReader();
+
+// Trigger RFID Scan Simulation
+router.post('/rfid/scan', authenticate, authorize('inventory:read'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    await rfidReaderInstance.connect();
+    const tags = await rfidReaderInstance.readInventory();
+    await rfidReaderInstance.disconnect();
+
+    res.json({
+      reader: 'Simulated-RFID-Zebra-FX9600',
+      status: 'SUCCESS',
+      scannedCount: tags.length,
+      tags
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ========================
+// BARCODE LOOKUP & WORKFLOWS
+// ========================
+
+// Scan to Lookup (by Barcode or SKU)
+router.get('/lookup/:code', authenticate, authorize('products:read'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { code } = req.params;
+
+    const product = await prisma.product.findFirst({
+      where: {
+        OR: [
+          { barcode: code },
+          { sku: code }
+        ]
+      },
+      include: {
+        category: true,
+        stocks: { include: { location: true } }
+      }
+    });
+
+    if (!product) {
+      res.status(404).json({ error: `Product with barcode/SKU '${code}' not found` });
+      return;
+    }
+
+    const totalOnHand = product.stocks.reduce((acc, s) => acc + s.quantityOnHand, 0);
+    const totalReserved = product.stocks.reduce((acc, s) => acc + s.quantityReserved, 0);
+
+    res.json({
+      product,
+      totalOnHand,
+      totalReserved,
+      totalAvailable: totalOnHand - totalReserved
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Scan to Pick (Validates item in open sales order)
+router.post('/scan-to-pick', authenticate, authorize('orders:fulfill'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { orderId, barcode, quantityPicked } = req.body;
+    const qty = quantityPicked || 1;
+
+    const order = await prisma.salesOrder.findUnique({
+      where: { id: orderId },
+      include: { items: { include: { product: true } } }
+    });
+
+    if (!order) {
+      res.status(404).json({ error: 'Sales order not found' });
+      return;
+    }
+
+    const item = order.items.find(i => i.product.barcode === barcode || i.product.sku === barcode);
+    if (!item) {
+      res.status(400).json({ error: `Product '${barcode}' does not belong to this sales order` });
+      return;
+    }
+
+    res.json({
+      success: true,
+      message: `Verified: ${item.product.name} (SKU: ${item.product.sku}) - Picked ${qty}`,
+      item: {
+        productId: item.productId,
+        productName: item.product.name,
+        orderedQuantity: item.quantity,
+        barcode: item.product.barcode
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Scan to Receive (Validates item in PO)
+router.post('/scan-to-receive', authenticate, authorize('po:receive'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { poId, barcode, quantityReceived } = req.body;
+    const qty = quantityReceived || 1;
+
+    const po = await prisma.purchaseOrder.findUnique({
+      where: { id: poId },
+      include: { items: { include: { product: true } } }
+    });
+
+    if (!po) {
+      res.status(404).json({ error: 'Purchase order not found' });
+      return;
+    }
+
+    const item = po.items.find(i => i.product.barcode === barcode || i.product.sku === barcode);
+    if (!item) {
+      res.status(400).json({ error: `Product '${barcode}' is not in this purchase order` });
+      return;
+    }
+
+    res.json({
+      success: true,
+      message: `Verified: ${item.product.name} ready for receipt of ${qty} units`,
+      item: {
+        productId: item.productId,
+        productName: item.product.name,
+        orderedQuantity: item.orderedQuantity,
+        receivedQuantity: item.receivedQuantity,
+        remainingToReceive: item.orderedQuantity - item.receivedQuantity
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Barcode Label Print Data Generator
+router.get('/label/:productId', authenticate, authorize('products:read'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { productId } = req.params;
+    const product = await prisma.product.findUnique({
+      where: { id: productId },
+      include: { category: true }
+    });
+
+    if (!product) {
+      res.status(404).json({ error: 'Product not found' });
+      return;
+    }
+
+    res.json({
+      name: product.name,
+      sku: product.sku,
+      barcode: product.barcode,
+      price: product.price,
+      category: product.category.name,
+      // Provide an SVG barcode representation or standard Code128 pattern
+      barcodeDataUrl: `https://barcodeapi.org/api/128/${encodeURIComponent(product.barcode)}`
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+export default router;

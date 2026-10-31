@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: xyz_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: xyz_user
+      POSTGRES_PASSWORD: xyz_password
+      POSTGRES_DB: xyz_inventory
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xyz_user -d xyz_inventory"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xyz_inventory_app
+    restart: always
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: 4000
+      NODE_ENV: production
+      DATABASE_URL: "file:./dev.db" # Or postgresql://xyz_user:xyz_password@postgres:5432/xyz_inventory?schema=public
+      JWT_ACCESS_SECRET: "xyz-super-secret-jwt-access-key-minimum-32-chars-long"
+      JWT_REFRESH_SECRET: "xyz-super-secret-jwt-refresh-key-minimum-32-chars-long"
+      UPLOAD_DIR: "./uploads"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - app_uploads:/app/server/uploads
+      - app_data:/app/server/prisma
+
+volumes:
+  postgres_data:
+  app_uploads:
+  app_data:
