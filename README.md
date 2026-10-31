@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # XYZ Retail Corporation - Retail Inventory Management System
 
 A complete, production-ready, enterprise-grade Retail Inventory Management System built for XYZ Retail Corporation. Engineered to achieve **98% inventory accuracy**, **25% fewer stockouts**, **20% less overstock**, **95% order fulfillment rate**, and **99.9% uptime**.
@@ -159,3 +160,6 @@ The test suite covers:
 - **Prototype Migration**: The prototype `inventory.json` contained basic items (`id`, `name`, `quantity`, `price`). During migration, each item is assigned a standardized SKU (`SKU-LEGACY-<id>`), placed in category `General Merchandise`, assigned to `WH-MAIN`, cost is derived at a 40% margin assumption, and an initial audit ledger movement is recorded.
 - **Email Service**: In compliance with the specification, password reset tokens and verification links are output to structured server console logs for local verification.
 - **RFID Scanner**: Uses an abstract interface `IRFIDReader` with a fully functional `SimulatedRFIDReader` generating valid EPC-96 tags and signal strength metrics (RSSI), allowing production drivers for Zebra or Impinj hardware to plug in seamlessly.
+=======
+# Inventory-management-system
+>>>>>>> 537b348c0bf639c0ee4989034cc340b3c7b6db18
